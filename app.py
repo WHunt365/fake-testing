@@ -9,37 +9,43 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 
+MODEL_FILE = 'accurate_fake_news_model.joblib'
 DATASET_FILE = 'fake_or_real_news.zip'
 
 # --- 1. HELPER FUNCTIONS ---
 
-@st.cache_resource(show_spinner="Downloading dataset and training AI... This takes about 1-2 minutes on first run!")
+@st.cache_resource(show_spinner="Training AI on 6,300 articles... This takes about 1 minute on first run!")
 def load_or_train_model():
-    """Loads the model if it exists, otherwise downloads real data and trains a highly accurate model."""
+    """Loads the model if it exists, otherwise trains it using the local CSV file."""
     if os.path.exists(MODEL_FILE):
         return joblib.load(MODEL_FILE)
     
-    # 1. Download a REAL dataset of ~6,300 real and fake news articles
-    dataset_url = "https://raw.githubusercontent.com/joolsa/fake_real_news_dataset/master/fake_or_real_news.csv"
-    
-    try:
-        df = pd.read_csv(dataset_url)
-    except Exception as e:
-        st.error(f"Failed to download dataset. Error: {e}")
+    # 1. Check if the dataset exists in the GitHub repo
+    if not os.path.exists(DATASET_FILE):
+        st.error(f"Dataset missing! Please upload '{DATASET_FILE}' to your GitHub repository.")
         return None
 
-    # The dataset has a 'text' column and a 'label' column ('FAKE' or 'REAL')
-    # We drop any empty rows to prevent training errors
+    try:
+        # Load the dataset
+        df = pd.read_csv(DATASET_FILE)
+    except Exception as e:
+        st.error(f"Failed to read the dataset. Error: {e}")
+        return None
+
+    # Ensure the columns are correct and drop empty rows
+    if 'text' not in df.columns or 'label' not in df.columns:
+        st.error("The CSV file must have 'text' and 'label' columns.")
+        return None
+        
     df = df.dropna(subset=['text', 'label'])
     
     # 2. Build the Machine Learning Pipeline
-    # We use TF-IDF to convert words to math, and Random Forest to find patterns
     pipeline = Pipeline([
         ('tfidf', TfidfVectorizer(stop_words='english', max_features=5000)),
         ('rf', RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1))
     ])
     
-    # 3. Train the model on the 6,300 articles
+    # 3. Train the model
     pipeline.fit(df['text'], df['label'])
     
     # 4. Save the model so it never has to train again
@@ -49,14 +55,12 @@ def load_or_train_model():
 
 def scrape_article_text(url):
     """Scrapes paragraph text from a given news article URL."""
-    # We use a standard browser User-Agent so news sites don't block us as a bot
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Extract text from paragraph tags
         paragraphs = soup.find_all('p')
         article_text = ' '.join([p.get_text() for p in paragraphs]).strip()
         
@@ -74,12 +78,10 @@ st.markdown("""
 Paste the URL of a news article below. Our Random Forest AI has been trained on **over 6,300 real and fake news articles** to accurately analyze text patterns, emotional language, and structure to predict authenticity.
 """)
 
-# Load the model into memory (will trigger training on the very first run)
 model = load_or_train_model()
 
 if model:
-    # User Input
-    url_input = st.text_input("Paste News Article URL here:", placeholder="https://www.nbcnews.com/...")
+    url_input = st.text_input("Paste News Article URL here:", placeholder="https://www.bbc.com/news/...")
 
     if st.button("Analyze Article", type="primary"):
         if not url_input:
@@ -93,16 +95,13 @@ if model:
                 else:
                     st.success(f"Successfully extracted {len(article_text)} characters of text!")
                     
-                    # Make Prediction
-                    classes = model.classes_  # Usually ['FAKE', 'REAL']
+                    classes = model.classes_  
                     probabilities = model.predict_proba([article_text])[0]
                     prob_dict = dict(zip(classes, probabilities))
                     
-                    # Ensure exact mapping to the dataset's labels
-                    fake_percent = prob_dict.get('FAKE', 0.0) * 100
-                    real_percent = prob_dict.get('REAL', 0.0) * 100
+                    fake_percent = prob_dict.get('FAKE', prob_dict.get('Fake', prob_dict.get('1', 0.0))) * 100
+                    real_percent = prob_dict.get('REAL', prob_dict.get('Real', prob_dict.get('0', 0.0))) * 100
                     
-                    # Display Results
                     st.markdown("### Detection Results")
                     
                     col1, col2 = st.columns(2)
@@ -116,5 +115,3 @@ if model:
                     
                     with st.expander("View the exact text the AI analyzed"):
                         st.write(article_text)
-else:
-    st.error("Model failed to load. Please check the logs.")
