@@ -10,23 +10,24 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 
 MODEL_FILE = 'accurate_fake_news_model.joblib'
-DATASET_FILE = 'data/fake_or_real_news.zip'
+DATASET_FILE = 'fake_or_real_news.zip'
+
 # --- 1. HELPER FUNCTIONS ---
 
 @st.cache_resource(show_spinner="Training AI on 6,300 articles... This takes about 1 minute on first run!")
 def load_or_train_model():
-    """Loads the model if it exists, otherwise trains it using the local CSV file."""
+    """Loads the model if it exists, otherwise trains it using the local ZIP file."""
     if os.path.exists(MODEL_FILE):
         return joblib.load(MODEL_FILE)
     
-    # 1. Check if the dataset exists in the GitHub repo
+    # 1. Check if the ZIP dataset exists in the GitHub repo
     if not os.path.exists(DATASET_FILE):
         st.error(f"Dataset missing! Please upload '{DATASET_FILE}' to your GitHub repository.")
         return None
 
     try:
-        # Load the dataset
-        df = pd.read_csv(DATASET_FILE)
+        # Pandas reads the CSV directly from inside the ZIP file!
+        df = pd.read_csv(DATASET_FILE, compression='zip')
     except Exception as e:
         st.error(f"Failed to read the dataset. Error: {e}")
         return None
