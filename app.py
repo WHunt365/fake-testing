@@ -9,7 +9,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 
-MODEL_FILE = 'accurate_fake_news_model.joblib'
+DATASET_FILE = 'fake_or_real_news.zip'
 
 # --- 1. HELPER FUNCTIONS ---
 
