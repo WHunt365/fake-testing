@@ -10,8 +10,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 
 MODEL_FILE = 'accurate_fake_news_model.joblib'
-DATASET_FILE = 'fake_or_real_news.zip'
-
+DATASET_FILE = 'data/fake_or_real_news.zip'
 # --- 1. HELPER FUNCTIONS ---
 
 @st.cache_resource(show_spinner="Training AI on 6,300 articles... This takes about 1 minute on first run!")
