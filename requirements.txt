@@ -1,6 +1,5 @@
 streamlit
 pandas
+numpy
 scikit-learn
-joblib
-beautifulsoup4
-requests
+nltk
