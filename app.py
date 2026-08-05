@@ -1,162 +1,202 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
+import re
 import string
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-from nltk.tokenize import word_tokenize
+import warnings
+import pandas as pd
 
-from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.svm import LinearSVC
+from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
-# Ensure NLTK resources are downloaded
-@st.cache_resource
-def download_nltk_data():
-    nltk.download('punkt')
-    nltk.download('stopwords')
-    nltk.download('wordnet')
+warnings.filterwarnings("ignore")
 
-download_nltk_data()
+RANDOM_STATE = 42
+TEST_SIZE = 0.2
 
-# ==========================================
-# 1. Data Preprocessing (Section 2.2)
-# ==========================================
-def preprocess_text(text):
+# ---------------------------------------------------------------------------
+# 1. TEXT PREPROCESSING[cite: 2]
+# ---------------------------------------------------------------------------
+def clean_text(text):
+    """Lowercase, strip URLs/punctuation/digits/extra whitespace[cite: 2]."""
     if not isinstance(text, str):
         return ""
     text = text.lower()
-    text = text.translate(str.maketrans('', '', string.punctuation))
-    tokens = word_tokenize(text)
-    stop_words = set(stopwords.words('english'))
-    lemmatizer = WordNetLemmatizer()
-    clean_tokens = [lemmatizer.lemmatize(word) for word in tokens if word not in stop_words]
-    return " ".join(clean_tokens)
+    text = re.sub(r"http\S+|www\.\S+", " ", text)          # remove URLs[cite: 2]
+    text = re.sub(r"<.*?>", " ", text)                       # remove HTML tags[cite: 2]
+    text = text.translate(str.maketrans("", "", string.punctuation)) # remove punctuation[cite: 2]
+    text = re.sub(r"\d+", " ", text)                          # remove digits[cite: 2]
+    text = re.sub(r"\s+", " ", text).strip()                  # collapse whitespace[cite: 2]
+    return text
+
+# ---------------------------------------------------------------------------
+# 2. DATASET LOADERS[cite: 2]
+# ---------------------------------------------------------------------------
+@st.cache_data
+def load_isot(fake_file, true_file):
+    fake = pd.read_csv(fake_file)
+    real = pd.read_csv(true_file)
+    fake["label"] = 1
+    real["label"] = 0
+    df = pd.concat([fake, real], ignore_index=True)
+    df["text"] = (df["title"].fillna("") + " " + df["text"].fillna(""))
+    return df[["text", "label"]]
 
 @st.cache_data
-def load_and_preprocess(file, text_col, label_col):
-    df = pd.read_csv(file)
-    df = df.dropna(subset=[text_col, label_col])
-    df = df.drop_duplicates(subset=[text_col])
-    
-    # Sample down for Streamlit performance if dataset is massive
-    if len(df) > 10000:
-        df = df.sample(10000, random_state=42)
-        
-    df['clean_text'] = df[text_col].apply(preprocess_text)
-    return df['clean_text'], df[label_col]
+def load_liar(train_tsv_file):
+    cols = ["id", "label", "statement", "subject", "speaker", "job", "state",
+            "party", "barely_true_c", "false_c", "half_true_c",
+            "mostly_true_c", "pants_fire_c", "context"]
+    df = pd.read_csv(train_tsv_file, sep="\t", header=None, names=cols)
 
-# ==========================================
-# 2. Experimental Setup & Modeling (Sections 2.3 - 2.6)
-# ==========================================
+    # Collapse LIAR's 6-way truthfulness scale into a binary fake/real label[cite: 2]
+    fake_labels = {"barely-true", "false", "pants-fire"}
+    df["label"] = df["label"].apply(lambda x: 1 if x in fake_labels else 0)
+    df["text"] = df["statement"]
+    return df[["text", "label"]]
+
 @st.cache_data
-def evaluate_models_on_dataset(X, y, dataset_name):
-    # TF-IDF Feature Extraction
-    vectorizer = TfidfVectorizer(ngram_range=(1, 2), max_features=5000)
-    X_tfidf = vectorizer.fit_transform(X)
-    
-    X_train, X_test, y_train, y_test = train_test_split(X_tfidf, y, test_size=0.2, random_state=42)
-    
-    # Five distinct standalone algorithms[cite: 1]
-    models = {
-        'Logistic Regr.': LogisticRegression(max_iter=1000, random_state=42),
-        'Random Forest': RandomForestClassifier(n_estimators=50, random_state=42),
-        'SVM': LinearSVC(random_state=42),
-        'K-NN': KNeighborsClassifier(n_neighbors=5),
-        'Decision Tree': DecisionTreeClassifier(random_state=42)
+def load_kaggle_fake_news(train_csv_file):
+    df = pd.read_csv(train_csv_file)
+    df["text"] = (df["title"].fillna("") + " " + df["text"].fillna(""))
+    return df[["text", "label"]]
+
+@st.cache_data
+def load_fakenewsnet(politifact_fake, politifact_real, gossipcop_fake, gossipcop_real, text_col="title"):
+    fakes = [pd.read_csv(politifact_fake), pd.read_csv(gossipcop_fake)]
+    reals = [pd.read_csv(politifact_real), pd.read_csv(gossipcop_real)]
+    fake = pd.concat(fakes, ignore_index=True)
+    real = pd.concat(reals, ignore_index=True)
+    fake["label"] = 1
+    real["label"] = 0
+    df = pd.concat([fake, real], ignore_index=True)
+    df["text"] = df[text_col].fillna("")
+    return df[["text", "label"]]
+
+# ---------------------------------------------------------------------------
+# 3. TRAIN + EVALUATE CLASSIFIERS[cite: 2]
+# ---------------------------------------------------------------------------
+def get_classifiers():
+    return {
+        "Logistic Regression": LogisticRegression(max_iter=1000, random_state=RANDOM_STATE),
+        "Random Forest": RandomForestClassifier(n_estimators=200, random_state=RANDOM_STATE),
+        "SVM": SVC(kernel="linear", random_state=RANDOM_STATE),
+        "K-Nearest Neighbors": KNeighborsClassifier(n_neighbors=5),
+        "Decision Tree": DecisionTreeClassifier(random_state=RANDOM_STATE),
     }
-    
+
+@st.cache_data
+def evaluate_dataset(df, dataset_name, max_features=5000):
+    df = df.dropna(subset=["text", "label"]).drop_duplicates(subset=["text"])
+    df["text"] = df["text"].apply(clean_text)
+    df = df[df["text"].str.len() > 0]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        df["text"], df["label"], test_size=TEST_SIZE,
+        random_state=RANDOM_STATE, stratify=df["label"]
+    )
+
+    vectorizer = TfidfVectorizer(max_features=max_features, ngram_range=(1, 2), stop_words="english")
+    X_train_tfidf = vectorizer.fit_transform(X_train)
+    X_test_tfidf = vectorizer.transform(X_test)
+
     results = []
-    for model_name, model in models.items():
-        # Cross-validation
-        cv_scores = cross_val_score(model, X_train, y_train, cv=5, scoring='accuracy')
-        
-        # Fit and Predict
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-        
-        # Calculate metrics[cite: 1]
-        acc = accuracy_score(y_test, y_pred)
-        prec = precision_score(y_test, y_pred, average='binary', zero_division=0)
-        rec = recall_score(y_test, y_pred, average='binary', zero_division=0)
-        f1 = f1_score(y_test, y_pred, average='binary', zero_division=0)
-        
+    for name, clf in get_classifiers().items():
+        clf.fit(X_train_tfidf, y_train)
+        y_pred = clf.predict(X_test_tfidf)
+
         results.append({
-            'Algorithm': model_name,
-            'Acc.': round(acc, 4),
-            'Prec.': round(prec, 4),
-            'Recall': round(rec, 4),
-            'F1': round(f1, 4)
+            "Dataset": dataset_name,
+            "Algorithm": name,
+            "Accuracy": round(accuracy_score(y_test, y_pred), 4),
+            "Precision": round(precision_score(y_test, y_pred, zero_division=0), 4),
+            "Recall": round(recall_score(y_test, y_pred, zero_division=0), 4),
+            "F1-score": round(f1_score(y_test, y_pred, zero_division=0), 4),
         })
-        
+
     return pd.DataFrame(results)
 
-# ==========================================
-# 3. Streamlit UI Build
-# ==========================================
-st.set_page_config(page_title="Fake News Detection Research", layout="wide")
+# ---------------------------------------------------------------------------
+# 4. STREAMLIT UI Build
+# ---------------------------------------------------------------------------
+st.set_page_config(page_title="Fake News Classifiers", layout="wide")
+st.title("Fake News Detection: Comparative Analysis[cite: 2]")
+st.markdown("Upload your datasets to train and evaluate 5 classification algorithms independently[cite: 2].")
 
-st.title("Cross-Domain Fake News Detection Experiment")
-st.write("""
-This application replicates the experimental methodology of the research paper: 
-**A Comparative Analysis of Machine Learning Classification Algorithms for Cross-Domain Fake News Detection**[cite: 1].
-Upload the four required datasets below to generate the study's findings tables.
-""")
+# Sidebar Uploaders
+st.sidebar.header("1. ISOT Dataset")
+isot_fake = st.sidebar.file_uploader("ISOT Fake.csv", type=["csv"])
+isot_true = st.sidebar.file_uploader("ISOT True.csv", type=["csv"])
 
-st.sidebar.header("Upload Datasets")
-st.sidebar.markdown("Please upload the specific CSV files for the four domains[cite: 1]. Ensure they have a `text` (or `statement`) column and a binary `label` column.")
+st.sidebar.header("2. LIAR Dataset")
+liar_train = st.sidebar.file_uploader("LIAR train.tsv", type=["tsv"])
 
-# File uploaders for the four datasets[cite: 1]
-isot_file = st.sidebar.file_uploader("1. ISOT Dataset", type=["csv"])
-liar_file = st.sidebar.file_uploader("2. LIAR Dataset", type=["csv"])
-kaggle_file = st.sidebar.file_uploader("3. Kaggle Fake News", type=["csv"])
-fakenewsnet_file = st.sidebar.file_uploader("4. FakeNewsNet", type=["csv"])
+st.sidebar.header("3. Kaggle Fake News")
+kaggle_train = st.sidebar.file_uploader("Kaggle train.csv", type=["csv"])
 
-datasets_config = {
-    'ISOT Fake News Dataset': {'file': isot_file, 'text_col': 'text', 'label_col': 'label'},
-    'LIAR Dataset': {'file': liar_file, 'text_col': 'statement', 'label_col': 'label'},
-    'Kaggle Fake News Dataset': {'file': kaggle_file, 'text_col': 'text', 'label_col': 'label'},
-    'FakeNewsNet': {'file': fakenewsnet_file, 'text_col': 'text', 'label_col': 'label'}
-}
+st.sidebar.header("4. FakeNewsNet")
+p_fake = st.sidebar.file_uploader("politifact_fake.csv", type=["csv"])
+p_real = st.sidebar.file_uploader("politifact_real.csv", type=["csv"])
+g_fake = st.sidebar.file_uploader("gossipcop_fake.csv", type=["csv"])
+g_real = st.sidebar.file_uploader("gossipcop_real.csv", type=["csv"])
 
-if st.button("Run Experiments", type="primary"):
-    all_results = {}
-    
-    for ds_name, config in datasets_config.items():
-        if config['file'] is not None:
-            with st.spinner(f"Processing and training on {ds_name}..."):
-                try:
-                    X, y = load_and_preprocess(config['file'], config['text_col'], config['label_col'])
-                    df_results = evaluate_models_on_dataset(X, y, ds_name)
-                    all_results[ds_name] = df_results
-                    
-                    st.subheader(f"Performance on the {ds_name}")
-                    st.dataframe(df_results, hide_index=True, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Error processing {ds_name}: Check if the column names match ({config['text_col']}, {config['label_col']}). Error details: {e}")
-        else:
-            st.warning(f"Awaiting upload for {ds_name}")
+if st.button("Run Evaluation", type="primary"):
+    all_results = []
 
-    # Generate Table 5: Average Performance
-    if len(all_results) > 0:
+    # Run ISOT
+    if isot_fake and isot_true:
+        with st.spinner("Processing ISOT Dataset..."):
+            df_isot = load_isot(isot_fake, isot_true)
+            res_isot = evaluate_dataset(df_isot, "ISOT Fake News Dataset")
+            all_results.append(res_isot)
+            st.subheader("ISOT Fake News Dataset Results")
+            st.dataframe(res_isot, hide_index=True, use_container_width=True)
+            
+    # Run LIAR
+    if liar_train:
+        with st.spinner("Processing LIAR Dataset..."):
+            df_liar = load_liar(liar_train)
+            res_liar = evaluate_dataset(df_liar, "LIAR Dataset")
+            all_results.append(res_liar)
+            st.subheader("LIAR Dataset Results")
+            st.dataframe(res_liar, hide_index=True, use_container_width=True)
+
+    # Run Kaggle
+    if kaggle_train:
+        with st.spinner("Processing Kaggle Fake News Dataset..."):
+            df_kaggle = load_kaggle_fake_news(kaggle_train)
+            res_kaggle = evaluate_dataset(df_kaggle, "Kaggle Fake News Dataset")
+            all_results.append(res_kaggle)
+            st.subheader("Kaggle Dataset Results")
+            st.dataframe(res_kaggle, hide_index=True, use_container_width=True)
+
+    # Run FakeNewsNet
+    if p_fake and p_real and g_fake and g_real:
+        with st.spinner("Processing FakeNewsNet Dataset..."):
+            df_fnn = load_fakenewsnet(p_fake, p_real, g_fake, g_real, text_col="title")
+            res_fnn = evaluate_dataset(df_fnn, "FakeNewsNet")
+            all_results.append(res_fnn)
+            st.subheader("FakeNewsNet Dataset Results")
+            st.dataframe(res_fnn, hide_index=True, use_container_width=True)
+
+    # Final Summary Table
+    if not all_results:
+        st.warning("Please upload the required files for at least one dataset in the sidebar to run the evaluation.")
+    else:
+        st.success("Evaluation Complete!")
         st.divider()
-        st.subheader("Table 5. Average Performance Across All Evaluated Datasets")
+        st.subheader("Summary: Cross-Dataset Average per Algorithm")
         
-        combined_df = pd.concat(all_results.values())
-        table_5 = combined_df.groupby('Algorithm').mean().reset_index()
-        table_5[['Acc.', 'Prec.', 'Recall', 'F1']] = table_5[['Acc.', 'Prec.', 'Recall', 'F1']].round(4)
+        final = pd.concat(all_results, ignore_index=True)
+        summary = final.groupby("Algorithm")[["Accuracy", "Precision", "Recall", "F1-score"]].mean().round(4).reset_index()
         
-        # Maintain manuscript order[cite: 1]
-        sorter = ['Logistic Regr.', 'Random Forest', 'SVM', 'K-NN', 'Decision Tree']
-        table_5['Algorithm'] = pd.Categorical(table_5['Algorithm'], categories=sorter, ordered=True)
-        table_5 = table_5.sort_values('Algorithm')
+        # Maintain manuscript order
+        sorter = ['Logistic Regression', 'Random Forest', 'SVM', 'K-Nearest Neighbors', 'Decision Tree']
+        summary['Algorithm'] = pd.Categorical(summary['Algorithm'], categories=sorter, ordered=True)
+        summary = summary.sort_values('Algorithm')
         
-        st.dataframe(table_5, hide_index=True, use_container_width=True)
-        
-        st.success("Experiments completed! You can now copy these metrics directly into your research paper draft.")
+        st.dataframe(summary, hide_index=True, use_container_width=True)
