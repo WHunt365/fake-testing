@@ -1,117 +1,162 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
-import joblib
-import os
 import pandas as pd
-from sklearn.model_selection import train_test_split
+import numpy as np
+import string
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import word_tokenize
+
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.pipeline import Pipeline
+from sklearn.svm import LinearSVC
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
-MODEL_FILE = 'accurate_fake_news_model.joblib'
-DATASET_FILE = 'fake_or_real_news.zip'
+# Ensure NLTK resources are downloaded
+@st.cache_resource
+def download_nltk_data():
+    nltk.download('punkt')
+    nltk.download('stopwords')
+    nltk.download('wordnet')
 
-# --- 1. HELPER FUNCTIONS ---
+download_nltk_data()
 
-@st.cache_resource(show_spinner="Training AI on 6,300 articles... This takes about 1 minute on first run!")
-def load_or_train_model():
-    """Loads the model if it exists, otherwise trains it using the local ZIP file."""
-    if os.path.exists(MODEL_FILE):
-        return joblib.load(MODEL_FILE)
+# ==========================================
+# 1. Data Preprocessing (Section 2.2)
+# ==========================================
+def preprocess_text(text):
+    if not isinstance(text, str):
+        return ""
+    text = text.lower()
+    text = text.translate(str.maketrans('', '', string.punctuation))
+    tokens = word_tokenize(text)
+    stop_words = set(stopwords.words('english'))
+    lemmatizer = WordNetLemmatizer()
+    clean_tokens = [lemmatizer.lemmatize(word) for word in tokens if word not in stop_words]
+    return " ".join(clean_tokens)
+
+@st.cache_data
+def load_and_preprocess(file, text_col, label_col):
+    df = pd.read_csv(file)
+    df = df.dropna(subset=[text_col, label_col])
+    df = df.drop_duplicates(subset=[text_col])
     
-    # 1. Check if the ZIP dataset exists in the GitHub repo
-    if not os.path.exists(DATASET_FILE):
-        st.error(f"Dataset missing! Please upload '{DATASET_FILE}' to your GitHub repository.")
-        return None
-
-    try:
-        # Pandas reads the CSV directly from inside the ZIP file!
-        df = pd.read_csv(DATASET_FILE, compression='zip')
-    except Exception as e:
-        st.error(f"Failed to read the dataset. Error: {e}")
-        return None
-
-    # Ensure the columns are correct and drop empty rows
-    if 'text' not in df.columns or 'label' not in df.columns:
-        st.error("The CSV file must have 'text' and 'label' columns.")
-        return None
+    # Sample down for Streamlit performance if dataset is massive
+    if len(df) > 10000:
+        df = df.sample(10000, random_state=42)
         
-    df = df.dropna(subset=['text', 'label'])
-    
-    # 2. Build the Machine Learning Pipeline
-    pipeline = Pipeline([
-        ('tfidf', TfidfVectorizer(stop_words='english', max_features=5000)),
-        ('rf', RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1))
-    ])
-    
-    # 3. Train the model
-    pipeline.fit(df['text'], df['label'])
-    
-    # 4. Save the model so it never has to train again
-    joblib.dump(pipeline, MODEL_FILE)
-    
-    return pipeline
+    df['clean_text'] = df[text_col].apply(preprocess_text)
+    return df['clean_text'], df[label_col]
 
-def scrape_article_text(url):
-    """Scrapes paragraph text from a given news article URL."""
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
+# ==========================================
+# 2. Experimental Setup & Modeling (Sections 2.3 - 2.6)
+# ==========================================
+@st.cache_data
+def evaluate_models_on_dataset(X, y, dataset_name):
+    # TF-IDF Feature Extraction
+    vectorizer = TfidfVectorizer(ngram_range=(1, 2), max_features=5000)
+    X_tfidf = vectorizer.fit_transform(X)
+    
+    X_train, X_test, y_train, y_test = train_test_split(X_tfidf, y, test_size=0.2, random_state=42)
+    
+    # Five distinct standalone algorithms[cite: 1]
+    models = {
+        'Logistic Regr.': LogisticRegression(max_iter=1000, random_state=42),
+        'Random Forest': RandomForestClassifier(n_estimators=50, random_state=42),
+        'SVM': LinearSVC(random_state=42),
+        'K-NN': KNeighborsClassifier(n_neighbors=5),
+        'Decision Tree': DecisionTreeClassifier(random_state=42)
+    }
+    
+    results = []
+    for model_name, model in models.items():
+        # Cross-validation
+        cv_scores = cross_val_score(model, X_train, y_train, cv=5, scoring='accuracy')
         
-        paragraphs = soup.find_all('p')
-        article_text = ' '.join([p.get_text() for p in paragraphs]).strip()
+        # Fit and Predict
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
         
-        return article_text
-    except Exception as e:
-        st.error(f"Could not scrape URL. The website might have anti-bot protection. Details: {e}")
-        return None
+        # Calculate metrics[cite: 1]
+        acc = accuracy_score(y_test, y_pred)
+        prec = precision_score(y_test, y_pred, average='binary', zero_division=0)
+        rec = recall_score(y_test, y_pred, average='binary', zero_division=0)
+        f1 = f1_score(y_test, y_pred, average='binary', zero_division=0)
+        
+        results.append({
+            'Algorithm': model_name,
+            'Acc.': round(acc, 4),
+            'Prec.': round(prec, 4),
+            'Recall': round(rec, 4),
+            'F1': round(f1, 4)
+        })
+        
+    return pd.DataFrame(results)
 
-# --- 2. STREAMLIT UI ---
+# ==========================================
+# 3. Streamlit UI Build
+# ==========================================
+st.set_page_config(page_title="Fake News Detection Research", layout="wide")
 
-st.set_page_config(page_title="Fake News AI Detector", page_icon="🕵️‍♂️")
-
-st.title("🕵️‍♂️ Fake News AI Detector")
-st.markdown("""
-Paste the URL of a news article below. Our Random Forest AI has been trained on **over 6,300 real and fake news articles** to accurately analyze text patterns, emotional language, and structure to predict authenticity.
+st.title("Cross-Domain Fake News Detection Experiment")
+st.write("""
+This application replicates the experimental methodology of the research paper: 
+**A Comparative Analysis of Machine Learning Classification Algorithms for Cross-Domain Fake News Detection**[cite: 1].
+Upload the four required datasets below to generate the study's findings tables.
 """)
 
-model = load_or_train_model()
+st.sidebar.header("Upload Datasets")
+st.sidebar.markdown("Please upload the specific CSV files for the four domains[cite: 1]. Ensure they have a `text` (or `statement`) column and a binary `label` column.")
 
-if model:
-    url_input = st.text_input("Paste News Article URL here:", placeholder="https://www.bbc.com/news/...")
+# File uploaders for the four datasets[cite: 1]
+isot_file = st.sidebar.file_uploader("1. ISOT Dataset", type=["csv"])
+liar_file = st.sidebar.file_uploader("2. LIAR Dataset", type=["csv"])
+kaggle_file = st.sidebar.file_uploader("3. Kaggle Fake News", type=["csv"])
+fakenewsnet_file = st.sidebar.file_uploader("4. FakeNewsNet", type=["csv"])
 
-    if st.button("Analyze Article", type="primary"):
-        if not url_input:
-            st.warning("Please enter a URL first!")
+datasets_config = {
+    'ISOT Fake News Dataset': {'file': isot_file, 'text_col': 'text', 'label_col': 'label'},
+    'LIAR Dataset': {'file': liar_file, 'text_col': 'statement', 'label_col': 'label'},
+    'Kaggle Fake News Dataset': {'file': kaggle_file, 'text_col': 'text', 'label_col': 'label'},
+    'FakeNewsNet': {'file': fakenewsnet_file, 'text_col': 'text', 'label_col': 'label'}
+}
+
+if st.button("Run Experiments", type="primary"):
+    all_results = {}
+    
+    for ds_name, config in datasets_config.items():
+        if config['file'] is not None:
+            with st.spinner(f"Processing and training on {ds_name}..."):
+                try:
+                    X, y = load_and_preprocess(config['file'], config['text_col'], config['label_col'])
+                    df_results = evaluate_models_on_dataset(X, y, ds_name)
+                    all_results[ds_name] = df_results
+                    
+                    st.subheader(f"Performance on the {ds_name}")
+                    st.dataframe(df_results, hide_index=True, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error processing {ds_name}: Check if the column names match ({config['text_col']}, {config['label_col']}). Error details: {e}")
         else:
-            with st.spinner("Scraping article and analyzing text patterns..."):
-                article_text = scrape_article_text(url_input)
-                
-                if not article_text or len(article_text) < 150:
-                    st.error("Could not extract enough text from this URL. The site might be blocking web scrapers, or it's a video-only article.")
-                else:
-                    st.success(f"Successfully extracted {len(article_text)} characters of text!")
-                    
-                    classes = model.classes_  
-                    probabilities = model.predict_proba([article_text])[0]
-                    prob_dict = dict(zip(classes, probabilities))
-                    
-                    fake_percent = prob_dict.get('FAKE', prob_dict.get('Fake', prob_dict.get('1', 0.0))) * 100
-                    real_percent = prob_dict.get('REAL', prob_dict.get('Real', prob_dict.get('0', 0.0))) * 100
-                    
-                    st.markdown("### Detection Results")
-                    
-                    col1, col2 = st.columns(2)
-                    col1.metric("Likelihood: FAKE", f"{fake_percent:.2f}%")
-                    col2.metric("Likelihood: REAL", f"{real_percent:.2f}%")
-                    
-                    if fake_percent > 50.0:
-                        st.error("🚨 **Conclusion:** This article exhibits patterns heavily associated with FAKE news.")
-                    else:
-                        st.success("✅ **Conclusion:** This article aligns with patterns commonly found in REAL news.")
-                    
-                    with st.expander("View the exact text the AI analyzed"):
-                        st.write(article_text)
+            st.warning(f"Awaiting upload for {ds_name}")
+
+    # Generate Table 5: Average Performance
+    if len(all_results) > 0:
+        st.divider()
+        st.subheader("Table 5. Average Performance Across All Evaluated Datasets")
+        
+        combined_df = pd.concat(all_results.values())
+        table_5 = combined_df.groupby('Algorithm').mean().reset_index()
+        table_5[['Acc.', 'Prec.', 'Recall', 'F1']] = table_5[['Acc.', 'Prec.', 'Recall', 'F1']].round(4)
+        
+        # Maintain manuscript order[cite: 1]
+        sorter = ['Logistic Regr.', 'Random Forest', 'SVM', 'K-NN', 'Decision Tree']
+        table_5['Algorithm'] = pd.Categorical(table_5['Algorithm'], categories=sorter, ordered=True)
+        table_5 = table_5.sort_values('Algorithm')
+        
+        st.dataframe(table_5, hide_index=True, use_container_width=True)
+        
+        st.success("Experiments completed! You can now copy these metrics directly into your research paper draft.")
