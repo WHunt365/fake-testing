@@ -18,7 +18,7 @@ import streamlit as st
 
 from core import (
     load_welfake, suggest_columns, load_with_mapping,
-    run_pipeline, predict_single_text,
+    run_pipeline, predict_single_text, read_csv_any,
 )
 
 st.set_page_config(page_title="Fake News Classifier Comparison", layout="wide")
@@ -57,24 +57,28 @@ df = None
 
 if dataset_choice == "WELFake Dataset":
     st.sidebar.markdown(
-        "Upload `WELFake_Dataset.csv`. Schema (title, text, label) is "
-        "confirmed from the dataset's documentation — no setup needed."
+        "Upload `WELFake_Dataset.csv` (plain, or zipped/gzipped). Schema "
+        "(title, text, label) is confirmed from the dataset's documentation "
+        "— no setup needed."
     )
-    welfake_f = st.sidebar.file_uploader("WELFake_Dataset.csv", type="csv", key="welfake")
+    welfake_f = st.sidebar.file_uploader(
+        "WELFake_Dataset.csv (.csv, .zip, or .gz)", type=["csv", "zip", "gz"], key="welfake"
+    )
     if welfake_f:
         df = load_welfake(welfake_f)
 
 else:  # BharatFakeNewsKosh, mahdimashayekhi, khushikyad001, or Generic CSV
     st.sidebar.markdown(
-        "This dataset's column names aren't hardcoded — upload it, "
-        "then confirm which columns to use below."
+        "This dataset's column names aren't hardcoded — upload it "
+        "(plain .csv, or zipped/gzipped), then confirm which columns to use below."
     )
     upload_key = dataset_choice.replace(" ", "_")
-    uploaded_f = st.sidebar.file_uploader("CSV file", type="csv", key=upload_key)
+    uploaded_f = st.sidebar.file_uploader(
+        "CSV file (.csv, .zip, or .gz)", type=["csv", "zip", "gz"], key=upload_key
+    )
 
     if uploaded_f:
-        preview_df = pd.read_csv(uploaded_f)
-        uploaded_f.seek(0)
+        preview_df = read_csv_any(uploaded_f)
         guess = suggest_columns(preview_df)
         columns = list(preview_df.columns)
 
