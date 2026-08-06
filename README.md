@@ -12,6 +12,7 @@ F1-score, confusion matrices, and a box to test your own headline.
 |---|---|
 | `app.py` | The Streamlit UI |
 | `core.py` | Data loading, preprocessing, TF-IDF, training/evaluation logic (no Streamlit code — reusable and independently testable) |
+| `.streamlit/config.toml` | Raises the file-upload limit to 500MB (Streamlit's default is 200MB) |
 | `requirements.txt` | Python dependencies |
 
 ## 1. Run it locally
@@ -42,6 +43,29 @@ you upload one the app shows a preview, guesses the likely text/title/label
 columns, and asks you to confirm (or correct) the mapping — including
 which value in the label column means "fake" — before training. This
 avoids silently mislabeling data based on a guessed schema.
+
+### Uploading large files (e.g. WELFake_Dataset.csv, ~245MB)
+
+Streamlit's file uploader defaults to a 200MB limit, which is too small
+for WELFake and would reject the upload. This repo includes
+`.streamlit/config.toml` with `maxUploadSize = 500`, which raises the
+limit to 500MB. As long as you keep that file in place (it's committed
+to the repo, not gitignored), the limit applies automatically both
+locally and on Streamlit Community Cloud — no extra flags needed.
+
+If you ever need a different limit, edit the number in
+`.streamlit/config.toml` directly, or override it for a single local run
+without editing the file:
+
+```bash
+streamlit run app.py --server.maxUploadSize 500
+```
+
+Note: Streamlit Community Cloud's own infrastructure has historically
+enforced its own hard ceiling on request size regardless of this
+setting. If a very large file still fails to upload after deploying,
+run the app locally instead (`streamlit run app.py`), or pre-filter /
+compress the dataset before upload.
 
 ## 2. Push this project to GitHub
 

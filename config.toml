@@ -1,0 +1,5 @@
+[server]
+# Raises Streamlit's default 200MB file-upload limit to 500MB so the
+# larger datasets (e.g. WELFake_Dataset.csv, ~245MB) can be uploaded
+# directly through the sidebar's file_uploader widgets.
+maxUploadSize = 500
