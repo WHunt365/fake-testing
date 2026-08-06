@@ -41,13 +41,12 @@ st.caption(
 # upload wait. Each uploader below still works as a manual override.
 # "Generic CSV" has no bundled default since it's meant for ad-hoc files.
 #
-# None of these 4 datasets have a schema hardcoded — including the
+# None of these datasets have a schema hardcoded — including the
 # FakeNews (iamrahulthorat) dataset below, since its column names aren't
 # publicly documented, so it goes through the same preview + confirm
 # flow as the others rather than risk guessing wrong.
 DEFAULT_DATASET_PATHS = {
     "FakeNews Dataset (iamrahulthorat)": "data/fakenews.csv.zip",
-    "BharatFakeNewsKosh": "data/BharatFakeNewsKosh.csv.zip",
     "Fake News Detection Dataset (mahdimashayekhi)": "data/mahdimashayekhi_fake_news.csv.zip",
     "Fake News Detection (khushikyad001)": "data/khushikyad001_fake_news.csv.zip",
     "Fake News Filipino (jcblaise)": "data/fake_news_filipino.zip",
@@ -76,7 +75,7 @@ if "dataset_name" not in st.session_state:
 st.sidebar.header("1. Choose a dataset")
 dataset_choice = st.sidebar.selectbox(
     "Dataset",
-    ["FakeNews Dataset (iamrahulthorat)", "BharatFakeNewsKosh",
+    ["FakeNews Dataset (iamrahulthorat)",
      "Fake News Detection Dataset (mahdimashayekhi)",
      "Fake News Detection (khushikyad001)",
      "Fake News Filipino (jcblaise)",
