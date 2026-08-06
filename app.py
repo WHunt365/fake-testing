@@ -1,11 +1,15 @@
 """
 Streamlit app for the Fake News Detection group project.
 
-Lets the user upload one of the 4 project datasets (or any generic
+Lets the user upload one of 4 project datasets (or any generic
 text/label CSV), trains all 5 classifiers (Logistic Regression, Random
 Forest, SVM, K-Nearest Neighbors, Decision Tree), and displays accuracy,
 precision, recall, and F1-score for each — plus confusion matrices and
 a live "test your own headline" box.
+
+None of the 4 datasets have a hardcoded column schema (including
+FakeNews (iamrahulthorat), whose columns aren't publicly documented) —
+each goes through a preview + confirm-your-columns step before training.
 
 Run locally:   streamlit run app.py
 Deploy:        push this folder to GitHub, then deploy on
@@ -19,7 +23,7 @@ import pandas as pd
 import streamlit as st
 
 from core import (
-    load_welfake, suggest_columns, load_with_mapping,
+    suggest_columns, load_with_mapping,
     run_pipeline, predict_single_text, read_csv_any,
 )
 
@@ -36,17 +40,18 @@ st.caption(
 # over 100MB), the app loads it straight from disk with no browser
 # upload wait. Each uploader below still works as a manual override.
 # "Generic CSV" has no bundled default since it's meant for ad-hoc files.
+#
+# None of these 4 datasets have a schema hardcoded — including the
+# FakeNews (iamrahulthorat) dataset below, since its column names aren't
+# publicly documented, so it goes through the same preview + confirm
+# flow as the others rather than risk guessing wrong.
 DEFAULT_DATASET_PATHS = {
-    "WELFake Dataset": "data/WELFake_Dataset.csv.zip",
+    "FakeNews Dataset (iamrahulthorat)": "data/fakenews.csv.zip",
     "BharatFakeNewsKosh": "data/BharatFakeNewsKosh.csv.zip",
     "Fake News Detection Dataset (mahdimashayekhi)": "data/mahdimashayekhi_fake_news.csv.zip",
     "Fake News Detection (khushikyad001)": "data/khushikyad001_fake_news.csv.zip",
+    "Fake News Filipino (jcblaise)": "data/fake_news_filipino.zip",
 }
-
-
-@st.cache_data(show_spinner="Loading bundled dataset...")
-def _load_bundled_welfake(path):
-    return load_welfake(path)
 
 
 @st.cache_data(show_spinner="Reading bundled dataset preview...")
@@ -62,104 +67,78 @@ if "dataset_name" not in st.session_state:
 # ---------------------------------------------------------------------------
 # SIDEBAR: dataset selection + upload
 #
-# WELFake has a schema confirmed by its authors (title, text, label),
-# hardcoded in core.load_welfake(). The other three datasets below don't
-# have a publicly documented schema, so this app shows you a preview and
-# auto-detected column guesses and asks you to confirm them before
-# training — rather than assuming column names that might be wrong.
+# None of the 4 datasets below have a publicly documented column schema,
+# so this app shows you a preview and auto-detected column guesses and
+# asks you to confirm them before training — rather than assuming column
+# names that might be wrong.
 # ---------------------------------------------------------------------------
 
 st.sidebar.header("1. Choose a dataset")
 dataset_choice = st.sidebar.selectbox(
     "Dataset",
-    ["WELFake Dataset", "BharatFakeNewsKosh",
+    ["FakeNews Dataset (iamrahulthorat)", "BharatFakeNewsKosh",
      "Fake News Detection Dataset (mahdimashayekhi)",
      "Fake News Detection (khushikyad001)",
+     "Fake News Filipino (jcblaise)",
      "Generic CSV (any other file)"],
 )
 
 df = None
 
-if dataset_choice == "WELFake Dataset":
-    default_path = DEFAULT_DATASET_PATHS["WELFake Dataset"]
-    bundled_exists = os.path.exists(default_path)
+default_path = DEFAULT_DATASET_PATHS.get(dataset_choice)  # None for Generic CSV
+bundled_exists = default_path is not None and os.path.exists(default_path)
 
-    if bundled_exists:
-        st.sidebar.success(f"✅ Using bundled dataset (`{default_path}`) — no upload needed.")
-        st.sidebar.caption("Upload a file below only if you want to override it with your own copy.")
-    else:
-        st.sidebar.markdown(
-            "Upload `WELFake_Dataset.csv` (plain, or zipped/gzipped). Schema "
-            "(title, text, label) is confirmed from the dataset's documentation "
-            "— no setup needed."
-        )
-
-    welfake_f = st.sidebar.file_uploader(
-        "Override with your own file (.csv, .zip, or .gz)" if bundled_exists
-        else "WELFake_Dataset.csv (.csv, .zip, or .gz)",
-        type=["csv", "zip", "gz"], key="welfake",
+if bundled_exists:
+    st.sidebar.success(f"✅ Using bundled dataset (`{default_path}`) — no upload needed.")
+    st.sidebar.caption(
+        "Column names still need confirming below. Upload a file only if "
+        "you want to override the bundled copy."
+    )
+else:
+    st.sidebar.markdown(
+        "This dataset's column names aren't hardcoded — upload it "
+        "(plain .csv, or zipped/gzipped), then confirm which columns to use below."
     )
 
-    if welfake_f:
-        df = load_welfake(welfake_f)
-    elif bundled_exists:
-        df = _load_bundled_welfake(default_path)
+upload_key = dataset_choice.replace(" ", "_")
+uploaded_f = st.sidebar.file_uploader(
+    "Override with your own file (.csv, .zip, or .gz)" if bundled_exists
+    else "CSV file (.csv, .zip, or .gz)",
+    type=["csv", "zip", "gz"], key=upload_key,
+)
 
-else:  # BharatFakeNewsKosh, mahdimashayekhi, khushikyad001, or Generic CSV
-    default_path = DEFAULT_DATASET_PATHS.get(dataset_choice)  # None for Generic CSV
-    bundled_exists = default_path is not None and os.path.exists(default_path)
+source = uploaded_f if uploaded_f is not None else (default_path if bundled_exists else None)
 
-    if bundled_exists:
-        st.sidebar.success(f"✅ Using bundled dataset (`{default_path}`) — no upload needed.")
-        st.sidebar.caption(
-            "Column names still need confirming below. Upload a file only if "
-            "you want to override the bundled copy."
-        )
-    else:
-        st.sidebar.markdown(
-            "This dataset's column names aren't hardcoded — upload it "
-            "(plain .csv, or zipped/gzipped), then confirm which columns to use below."
-        )
+if source is not None:
+    preview_df = _read_bundled_preview(source) if source == default_path else read_csv_any(source)
+    guess = suggest_columns(preview_df)
+    columns = list(preview_df.columns)
 
-    upload_key = dataset_choice.replace(" ", "_")
-    uploaded_f = st.sidebar.file_uploader(
-        "Override with your own file (.csv, .zip, or .gz)" if bundled_exists
-        else "CSV file (.csv, .zip, or .gz)",
-        type=["csv", "zip", "gz"], key=upload_key,
+    def idx_or_0(col):
+        return columns.index(col) if col in columns else 0
+
+    st.sidebar.caption(f"Detected {len(preview_df):,} rows, {len(columns)} columns.")
+    text_col = st.sidebar.selectbox(
+        "Text / article column", columns, index=idx_or_0(guess["text_col"]), key=f"{upload_key}_text"
+    )
+    title_options = ["(none)"] + columns
+    title_default = title_options.index(guess["title_col"]) if guess["title_col"] in title_options else 0
+    title_col_choice = st.sidebar.selectbox(
+        "Title column (optional, combined with text)", title_options,
+        index=title_default, key=f"{upload_key}_title"
+    )
+    title_col = None if title_col_choice == "(none)" else title_col_choice
+    label_col = st.sidebar.selectbox(
+        "Label column", columns, index=idx_or_0(guess["label_col"]), key=f"{upload_key}_label"
     )
 
-    source = uploaded_f if uploaded_f is not None else (default_path if bundled_exists else None)
+    unique_vals = preview_df[label_col].dropna().unique().tolist()[:20]
+    fake_value = st.sidebar.selectbox(
+        "Which value means FAKE?", unique_vals, key=f"{upload_key}_fakeval"
+    )
 
-    if source is not None:
-        preview_df = _read_bundled_preview(source) if source == default_path else read_csv_any(source)
-        guess = suggest_columns(preview_df)
-        columns = list(preview_df.columns)
-
-        def idx_or_0(col):
-            return columns.index(col) if col in columns else 0
-
-        st.sidebar.caption(f"Detected {len(preview_df):,} rows, {len(columns)} columns.")
-        text_col = st.sidebar.selectbox(
-            "Text / article column", columns, index=idx_or_0(guess["text_col"]), key=f"{upload_key}_text"
-        )
-        title_options = ["(none)"] + columns
-        title_default = title_options.index(guess["title_col"]) if guess["title_col"] in title_options else 0
-        title_col_choice = st.sidebar.selectbox(
-            "Title column (optional, combined with text)", title_options,
-            index=title_default, key=f"{upload_key}_title"
-        )
-        title_col = None if title_col_choice == "(none)" else title_col_choice
-        label_col = st.sidebar.selectbox(
-            "Label column", columns, index=idx_or_0(guess["label_col"]), key=f"{upload_key}_label"
-        )
-
-        unique_vals = preview_df[label_col].dropna().unique().tolist()[:20]
-        fake_value = st.sidebar.selectbox(
-            "Which value means FAKE?", unique_vals, key=f"{upload_key}_fakeval"
-        )
-
-        df = load_with_mapping(source, text_col=text_col, label_col=label_col,
-                                fake_value=fake_value, title_col=title_col)
+    df = load_with_mapping(source, text_col=text_col, label_col=label_col,
+                            fake_value=fake_value, title_col=title_col)
 
 st.sidebar.header("2. Settings")
 max_features = st.sidebar.slider("Max TF-IDF features", 500, 20000, 5000, step=500)
