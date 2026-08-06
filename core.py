@@ -6,8 +6,10 @@ Handles: loading the 4 dataset formats, text cleaning, TF-IDF feature
 extraction, training the 5 classifiers, and computing evaluation metrics.
 """
 
+import gzip
 import re
 import string
+import zipfile
 
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -64,10 +66,53 @@ def clean_text(text):
 # Streamlit app does this for you interactively).
 # ---------------------------------------------------------------------------
 
+def read_csv_any(file_obj):
+    """Read a CSV from a plain .csv file, or transparently from a .zip
+    or .gz compressed file. Accepts either a file path (str) or a
+    file-like object such as the one returned by st.file_uploader.
+
+    For .zip archives, the first *.csv member found inside is used.
+    """
+    is_path = isinstance(file_obj, str)
+    name = file_obj if is_path else (getattr(file_obj, "name", "") or "")
+    name_lower = str(name).lower()
+
+    if not is_path:
+        file_obj.seek(0)
+
+    is_zip = name_lower.endswith(".zip") or (not is_path and zipfile.is_zipfile(file_obj))
+    if not is_path:
+        file_obj.seek(0)
+
+    if is_zip:
+        with zipfile.ZipFile(file_obj) as zf:
+            csv_names = [n for n in zf.namelist() if n.lower().endswith(".csv")]
+            if not csv_names:
+                raise ValueError("No .csv file found inside the uploaded .zip archive.")
+            with zf.open(csv_names[0]) as f:
+                df = pd.read_csv(f)
+        if not is_path:
+            file_obj.seek(0)
+        return df
+
+    if name_lower.endswith(".gz") or name_lower.endswith(".gzip"):
+        with gzip.open(file_obj, "rt", encoding="utf-8", errors="replace") as f:
+            df = pd.read_csv(f)
+        if not is_path:
+            file_obj.seek(0)
+        return df
+
+    df = pd.read_csv(file_obj)
+    if not is_path:
+        file_obj.seek(0)
+    return df
+
+
 def load_welfake(csv_file):
     """WELFake_Dataset.csv — columns: [index], title, text, label
-    (label: 0 = fake, 1 = real in the source data; flipped here)."""
-    df = pd.read_csv(csv_file)
+    (label: 0 = fake, 1 = real in the source data; flipped here).
+    Accepts plain .csv, or .zip/.gz containing it."""
+    df = read_csv_any(csv_file)
     unnamed_cols = [c for c in df.columns if str(c).lower().startswith("unnamed")]
     df = df.drop(columns=unnamed_cols, errors="ignore")
     title_col = "title" if "title" in df.columns else None
@@ -112,8 +157,10 @@ def load_with_mapping(csv_file, text_col, label_col, fake_value, title_col=None)
                 (e.g. 1, "FAKE", "fake") — everything else is treated
                 as real. Compared as a lowercased string, so it works
                 for both numeric and text labels.
+
+    Accepts plain .csv, or .zip/.gz containing it.
     """
-    df = pd.read_csv(csv_file)
+    df = read_csv_any(csv_file)
     text_series = df[text_col].fillna("")
     if title_col and title_col in df.columns and title_col != text_col:
         text_series = df[title_col].fillna("") + " " + text_series
