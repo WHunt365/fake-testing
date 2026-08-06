@@ -17,8 +17,8 @@ import pandas as pd
 import streamlit as st
 
 from core import (
-    load_isot, load_liar, load_kaggle_fake_news, load_fakenewsnet,
-    load_generic_csv, run_pipeline, predict_single_text,
+    load_welfake, suggest_columns, load_with_mapping,
+    run_pipeline, predict_single_text,
 )
 
 st.set_page_config(page_title="Fake News Classifier Comparison", layout="wide")
@@ -36,55 +36,73 @@ if "dataset_name" not in st.session_state:
 
 # ---------------------------------------------------------------------------
 # SIDEBAR: dataset selection + upload
+#
+# WELFake has a schema confirmed by its authors (title, text, label),
+# hardcoded in core.load_welfake(). The other three datasets below don't
+# have a publicly documented schema, so this app shows you a preview and
+# auto-detected column guesses and asks you to confirm them before
+# training — rather than assuming column names that might be wrong.
 # ---------------------------------------------------------------------------
 
 st.sidebar.header("1. Choose a dataset")
 dataset_choice = st.sidebar.selectbox(
-    "Dataset format",
-    ["ISOT Fake News Dataset", "LIAR Dataset", "Kaggle Fake News Dataset",
-     "FakeNewsNet", "Generic CSV (text + label columns)"],
+    "Dataset",
+    ["WELFake Dataset", "BharatFakeNewsKosh",
+     "Fake News Detection Dataset (mahdimashayekhi)",
+     "Fake News Detection (khushikyad001)",
+     "Generic CSV (any other file)"],
 )
 
 df = None
 
-if dataset_choice == "ISOT Fake News Dataset":
-    st.sidebar.markdown("Upload the two ISOT files.")
-    fake_f = st.sidebar.file_uploader("Fake.csv", type="csv", key="isot_fake")
-    true_f = st.sidebar.file_uploader("True.csv", type="csv", key="isot_true")
-    if fake_f and true_f:
-        df = load_isot(fake_f, true_f)
+if dataset_choice == "WELFake Dataset":
+    st.sidebar.markdown(
+        "Upload `WELFake_Dataset.csv`. Schema (title, text, label) is "
+        "confirmed from the dataset's documentation — no setup needed."
+    )
+    welfake_f = st.sidebar.file_uploader("WELFake_Dataset.csv", type="csv", key="welfake")
+    if welfake_f:
+        df = load_welfake(welfake_f)
 
-elif dataset_choice == "LIAR Dataset":
-    st.sidebar.markdown("Upload the LIAR `train.tsv` file (tab-separated, no header).")
-    liar_f = st.sidebar.file_uploader("train.tsv", type=["tsv", "csv"], key="liar")
-    if liar_f:
-        df = load_liar(liar_f)
+else:  # BharatFakeNewsKosh, mahdimashayekhi, khushikyad001, or Generic CSV
+    st.sidebar.markdown(
+        "This dataset's column names aren't hardcoded — upload it, "
+        "then confirm which columns to use below."
+    )
+    upload_key = dataset_choice.replace(" ", "_")
+    uploaded_f = st.sidebar.file_uploader("CSV file", type="csv", key=upload_key)
 
-elif dataset_choice == "Kaggle Fake News Dataset":
-    st.sidebar.markdown("Upload the Kaggle competition `train.csv` (columns: title, text, label).")
-    kaggle_f = st.sidebar.file_uploader("train.csv", type="csv", key="kaggle")
-    if kaggle_f:
-        df = load_kaggle_fake_news(kaggle_f)
+    if uploaded_f:
+        preview_df = pd.read_csv(uploaded_f)
+        uploaded_f.seek(0)
+        guess = suggest_columns(preview_df)
+        columns = list(preview_df.columns)
 
-elif dataset_choice == "FakeNewsNet":
-    st.sidebar.markdown("Upload the 4 FakeNewsNet CSVs.")
-    pf = st.sidebar.file_uploader("politifact_fake.csv", type="csv", key="pf")
-    pr = st.sidebar.file_uploader("politifact_real.csv", type="csv", key="pr")
-    gf = st.sidebar.file_uploader("gossipcop_fake.csv", type="csv", key="gf")
-    gr = st.sidebar.file_uploader("gossipcop_real.csv", type="csv", key="gr")
-    text_col = st.sidebar.text_input("Text column to use", value="title")
-    if pf and pr and gf and gr:
-        df = load_fakenewsnet([pf, gf], [pr, gr], text_col=text_col)
+        def idx_or_0(col):
+            return columns.index(col) if col in columns else 0
 
-else:  # Generic CSV
-    st.sidebar.markdown("Upload any CSV with a text column and a label column.")
-    generic_f = st.sidebar.file_uploader("dataset.csv", type="csv", key="generic")
-    if generic_f:
-        preview = pd.read_csv(generic_f)
-        generic_f.seek(0)
-        text_col = st.sidebar.selectbox("Text column", preview.columns, key="generic_text_col")
-        label_col = st.sidebar.selectbox("Label column", preview.columns, key="generic_label_col")
-        df = load_generic_csv(generic_f, text_col, label_col)
+        st.sidebar.caption(f"Detected {len(preview_df):,} rows, {len(columns)} columns.")
+        text_col = st.sidebar.selectbox(
+            "Text / article column", columns, index=idx_or_0(guess["text_col"]), key=f"{upload_key}_text"
+        )
+        title_options = ["(none)"] + columns
+        title_default = title_options.index(guess["title_col"]) if guess["title_col"] in title_options else 0
+        title_col_choice = st.sidebar.selectbox(
+            "Title column (optional, combined with text)", title_options,
+            index=title_default, key=f"{upload_key}_title"
+        )
+        title_col = None if title_col_choice == "(none)" else title_col_choice
+        label_col = st.sidebar.selectbox(
+            "Label column", columns, index=idx_or_0(guess["label_col"]), key=f"{upload_key}_label"
+        )
+
+        unique_vals = preview_df[label_col].dropna().unique().tolist()[:20]
+        fake_value = st.sidebar.selectbox(
+            "Which value means FAKE?", unique_vals, key=f"{upload_key}_fakeval"
+        )
+
+        df = load_with_mapping(uploaded_f, text_col=text_col, label_col=label_col,
+                                fake_value=fake_value, title_col=title_col)
 
 st.sidebar.header("2. Settings")
 max_features = st.sidebar.slider("Max TF-IDF features", 500, 20000, 5000, step=500)

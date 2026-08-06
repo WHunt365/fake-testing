@@ -27,14 +27,21 @@ streamlit run app.py
 ```
 
 This opens the app at `http://localhost:8501`. Use the sidebar to pick a
-dataset format, upload the corresponding file(s), then click
+dataset, upload the corresponding file(s), then click
 **"Run all 5 classifiers."**
 
-Dataset download links (same ones from the paper draft):
-- ISOT: https://www.kaggle.com/datasets/clmentbisaillon/fake-and-real-news-dataset
-- LIAR: https://huggingface.co/datasets/liar (or the Kaggle mirror)
-- Kaggle Fake News: https://www.kaggle.com/c/fake-news
-- FakeNewsNet: https://github.com/KaiDMML/FakeNewsNet
+Datasets used in this project:
+- **WELFake Dataset** — schema is confirmed (title, text, label), so this
+  one just works after upload: https://www.kaggle.com/datasets/saurabhshahane/fake-news-classification
+- **BharatFakeNewsKosh** — https://www.kaggle.com/datasets/man2191989/bharatfakenewskosh
+- **Fake News Detection Dataset** (mahdimashayekhi) — https://www.kaggle.com/datasets/mahdimashayekhi/fake-news-detection-dataset
+- **Fake News Detection** (khushikyad001) — https://www.kaggle.com/datasets/khushikyad001/fake-news-detection
+
+The last three don't have a publicly documented column schema, so after
+you upload one the app shows a preview, guesses the likely text/title/label
+columns, and asks you to confirm (or correct) the mapping — including
+which value in the label column means "fake" — before training. This
+avoids silently mislabeling data based on a guessed schema.
 
 ## 2. Push this project to GitHub
 

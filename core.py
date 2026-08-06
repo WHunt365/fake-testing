@@ -47,59 +47,80 @@ def clean_text(text):
 # Each accepts file paths OR file-like objects (e.g. from st.file_uploader)
 # and returns a DataFrame with exactly two columns: "text", "label"
 # label: 1 = fake, 0 = real
+#
+# Only WELFake has a schema that's independently documented and confirmed
+# (by its authors' Zenodo record and the Kaggle listing): columns
+# title, text, label, where label 0 = fake, 1 = real. That loader is
+# hardcoded below and automatically flips the label to match this
+# project's 1 = fake / 0 = real convention.
+#
+# BharatFakeNewsKosh, the mahdimashayekhi "Fake News Detection Dataset",
+# and the khushikyad001 "Fake News Detection" dataset do not have a
+# publicly documented column schema at the time this was written, so
+# guessing exact column names here would risk silently mislabeling your
+# data. Instead, use `suggest_columns()` to auto-detect likely columns
+# after upload, and `load_with_mapping()` with the confirmed column
+# names/label value once you've checked a preview of the file (the
+# Streamlit app does this for you interactively).
 # ---------------------------------------------------------------------------
 
-def load_isot(fake_file, true_file):
-    fake = pd.read_csv(fake_file)
-    real = pd.read_csv(true_file)
-    fake["label"] = 1
-    real["label"] = 0
-    df = pd.concat([fake, real], ignore_index=True)
-    title_col = "title" if "title" in df.columns else None
-    text_col = "text" if "text" in df.columns else df.columns[0]
-    df["text"] = ((df[title_col].fillna("") + " ") if title_col else "") + df[text_col].fillna("")
-    return df[["text", "label"]]
-
-
-def load_liar(tsv_file):
-    cols = ["id", "label", "statement", "subject", "speaker", "job", "state",
-            "party", "barely_true_c", "false_c", "half_true_c",
-            "mostly_true_c", "pants_fire_c", "context"]
-    df = pd.read_csv(tsv_file, sep="\t", header=None, names=cols)
-    fake_labels = {"barely-true", "false", "pants-fire"}
-    df["label"] = df["label"].apply(lambda x: 1 if x in fake_labels else 0)
-    df["text"] = df["statement"]
-    return df[["text", "label"]]
-
-
-def load_kaggle_fake_news(csv_file):
+def load_welfake(csv_file):
+    """WELFake_Dataset.csv — columns: [index], title, text, label
+    (label: 0 = fake, 1 = real in the source data; flipped here)."""
     df = pd.read_csv(csv_file)
+    unnamed_cols = [c for c in df.columns if str(c).lower().startswith("unnamed")]
+    df = df.drop(columns=unnamed_cols, errors="ignore")
     title_col = "title" if "title" in df.columns else None
-    text_col = "text" if "text" in df.columns else df.columns[0]
+    text_col = "text" if "text" in df.columns else df.columns[-1]
     df["text"] = ((df[title_col].fillna("") + " ") if title_col else "") + df[text_col].fillna("")
+    df["label"] = df["label"].apply(lambda x: 0 if int(x) == 1 else 1)  # flip to 1=fake, 0=real
     return df[["text", "label"]]
 
 
-def load_fakenewsnet(fake_files, real_files, text_col="title"):
-    fakes = [pd.read_csv(f) for f in fake_files]
-    reals = [pd.read_csv(f) for f in real_files]
-    fake = pd.concat(fakes, ignore_index=True)
-    real = pd.concat(reals, ignore_index=True)
-    fake["label"] = 1
-    real["label"] = 0
-    df = pd.concat([fake, real], ignore_index=True)
-    df["text"] = df[text_col].fillna("")
-    return df[["text", "label"]]
+def suggest_columns(df):
+    """Best-effort guess at text/title/label columns for a dataset whose
+    schema isn't hardcoded. Always show this guess to the user for
+    confirmation before training — don't trust it silently."""
+    text_candidates = ["text", "content", "article", "article_text", "body",
+                        "statement", "news", "news_text", "full_text"]
+    title_candidates = ["title", "headline", "heading"]
+    label_candidates = ["label", "class", "type", "category", "target",
+                         "is_fake", "fake_or_real", "outcome", "result"]
+
+    cols_lower = {str(c).lower(): c for c in df.columns}
+
+    def find(cands):
+        for c in cands:
+            if c in cols_lower:
+                return cols_lower[c]
+        return None
+
+    return {
+        "text_col": find(text_candidates) or (df.columns[0] if len(df.columns) else None),
+        "title_col": find(title_candidates),
+        "label_col": find(label_candidates),
+    }
 
 
-def load_generic_csv(csv_file, text_col, label_col):
-    """For any CSV with a free-text column and a 0/1 (or fake/real) label column."""
+def load_with_mapping(csv_file, text_col, label_col, fake_value, title_col=None):
+    """
+    Generic loader with an explicit column mapping the user confirms.
+    Used for BharatFakeNewsKosh, the mahdimashayekhi and khushikyad001
+    datasets, and any other custom CSV.
+
+    fake_value: the raw value in label_col that represents "fake"
+                (e.g. 1, "FAKE", "fake") — everything else is treated
+                as real. Compared as a lowercased string, so it works
+                for both numeric and text labels.
+    """
     df = pd.read_csv(csv_file)
-    df = df.rename(columns={text_col: "text", label_col: "label"})
-    if df["label"].dtype == object:
-        mapping = {"fake": 1, "real": 0, "FAKE": 1, "REAL": 0, "1": 1, "0": 0}
-        df["label"] = df["label"].map(lambda v: mapping.get(str(v).strip(), v))
-    df["label"] = df["label"].astype(int)
+    text_series = df[text_col].fillna("")
+    if title_col and title_col in df.columns and title_col != text_col:
+        text_series = df[title_col].fillna("") + " " + text_series
+    df["text"] = text_series
+    df["label"] = df[label_col].apply(
+        lambda v: 1 if str(v).strip().lower() == str(fake_value).strip().lower() else 0
+    )
     return df[["text", "label"]]
 
 
