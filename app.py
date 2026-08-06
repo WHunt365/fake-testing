@@ -12,6 +12,8 @@ Deploy:        push this folder to GitHub, then deploy on
                https://share.streamlit.io pointing at app.py
 """
 
+import os
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
@@ -28,6 +30,29 @@ st.caption(
     "Compares Logistic Regression, Random Forest, SVM, K-Nearest Neighbors, "
     "and Decision Tree (trained independently, no ensembling) on your chosen dataset."
 )
+
+# Bundled datasets: if you commit a compressed file to the repo at the
+# matching path below (keep files zipped/gzipped — GitHub blocks files
+# over 100MB), the app loads it straight from disk with no browser
+# upload wait. Each uploader below still works as a manual override.
+# "Generic CSV" has no bundled default since it's meant for ad-hoc files.
+DEFAULT_DATASET_PATHS = {
+    "WELFake Dataset": "data/WELFake_Dataset.csv.zip",
+    "BharatFakeNewsKosh": "data/BharatFakeNewsKosh.csv.zip",
+    "Fake News Detection Dataset (mahdimashayekhi)": "data/mahdimashayekhi_fake_news.csv.zip",
+    "Fake News Detection (khushikyad001)": "data/khushikyad001_fake_news.csv.zip",
+}
+
+
+@st.cache_data(show_spinner="Loading bundled dataset...")
+def _load_bundled_welfake(path):
+    return load_welfake(path)
+
+
+@st.cache_data(show_spinner="Reading bundled dataset preview...")
+def _read_bundled_preview(path):
+    return read_csv_any(path)
+
 
 if "results" not in st.session_state:
     st.session_state.results = None
@@ -56,29 +81,57 @@ dataset_choice = st.sidebar.selectbox(
 df = None
 
 if dataset_choice == "WELFake Dataset":
-    st.sidebar.markdown(
-        "Upload `WELFake_Dataset.csv` (plain, or zipped/gzipped). Schema "
-        "(title, text, label) is confirmed from the dataset's documentation "
-        "— no setup needed."
-    )
+    default_path = DEFAULT_DATASET_PATHS["WELFake Dataset"]
+    bundled_exists = os.path.exists(default_path)
+
+    if bundled_exists:
+        st.sidebar.success(f"✅ Using bundled dataset (`{default_path}`) — no upload needed.")
+        st.sidebar.caption("Upload a file below only if you want to override it with your own copy.")
+    else:
+        st.sidebar.markdown(
+            "Upload `WELFake_Dataset.csv` (plain, or zipped/gzipped). Schema "
+            "(title, text, label) is confirmed from the dataset's documentation "
+            "— no setup needed."
+        )
+
     welfake_f = st.sidebar.file_uploader(
-        "WELFake_Dataset.csv (.csv, .zip, or .gz)", type=["csv", "zip", "gz"], key="welfake"
+        "Override with your own file (.csv, .zip, or .gz)" if bundled_exists
+        else "WELFake_Dataset.csv (.csv, .zip, or .gz)",
+        type=["csv", "zip", "gz"], key="welfake",
     )
+
     if welfake_f:
         df = load_welfake(welfake_f)
+    elif bundled_exists:
+        df = _load_bundled_welfake(default_path)
 
 else:  # BharatFakeNewsKosh, mahdimashayekhi, khushikyad001, or Generic CSV
-    st.sidebar.markdown(
-        "This dataset's column names aren't hardcoded — upload it "
-        "(plain .csv, or zipped/gzipped), then confirm which columns to use below."
-    )
+    default_path = DEFAULT_DATASET_PATHS.get(dataset_choice)  # None for Generic CSV
+    bundled_exists = default_path is not None and os.path.exists(default_path)
+
+    if bundled_exists:
+        st.sidebar.success(f"✅ Using bundled dataset (`{default_path}`) — no upload needed.")
+        st.sidebar.caption(
+            "Column names still need confirming below. Upload a file only if "
+            "you want to override the bundled copy."
+        )
+    else:
+        st.sidebar.markdown(
+            "This dataset's column names aren't hardcoded — upload it "
+            "(plain .csv, or zipped/gzipped), then confirm which columns to use below."
+        )
+
     upload_key = dataset_choice.replace(" ", "_")
     uploaded_f = st.sidebar.file_uploader(
-        "CSV file (.csv, .zip, or .gz)", type=["csv", "zip", "gz"], key=upload_key
+        "Override with your own file (.csv, .zip, or .gz)" if bundled_exists
+        else "CSV file (.csv, .zip, or .gz)",
+        type=["csv", "zip", "gz"], key=upload_key,
     )
 
-    if uploaded_f:
-        preview_df = read_csv_any(uploaded_f)
+    source = uploaded_f if uploaded_f is not None else (default_path if bundled_exists else None)
+
+    if source is not None:
+        preview_df = _read_bundled_preview(source) if source == default_path else read_csv_any(source)
         guess = suggest_columns(preview_df)
         columns = list(preview_df.columns)
 
@@ -105,7 +158,7 @@ else:  # BharatFakeNewsKosh, mahdimashayekhi, khushikyad001, or Generic CSV
             "Which value means FAKE?", unique_vals, key=f"{upload_key}_fakeval"
         )
 
-        df = load_with_mapping(uploaded_f, text_col=text_col, label_col=label_col,
+        df = load_with_mapping(source, text_col=text_col, label_col=label_col,
                                 fake_value=fake_value, title_col=title_col)
 
 st.sidebar.header("2. Settings")
